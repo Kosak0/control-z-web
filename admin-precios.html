@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Administración de precios | Cafetería Control Z</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #eef2ef; --card: #fff; --ink: #1b2a2f; --muted: #5a6b70;
+    --accent: #1f5fbf; --changed: #ffe27a; --line: #cdd6d2; --danger: #b3372f; --ok: #1c7c4d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151d20; --card: #1d282c; --ink: #e8eeea; --muted: #9fb0b3;
+            --accent: #7fb0ff; --changed: #4a4220; --line: #2c393d; --danger: #ff8a80; --ok: #6fd6a0; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font-family: "Bricolage Grotesque", system-ui, sans-serif; line-height: 1.5; }
+  .admin { max-width: 960px; margin: 0 auto; padding: 40px 20px 100px; }
+  h1 { font-size: clamp(1.8rem, 4vw, 2.6rem); font-weight: 800; margin: 0 0 4px; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+
+  .barra { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 16px; }
+  .barra input[type=search] { flex: 1 1 220px; }
+  input, select, button { font: inherit; color: inherit; }
+  input[type=text], input[type=number], input[type=search] {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card);
+  }
+  input:focus-visible, button:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+  button { padding: 9px 16px; border-radius: 8px; border: 2px solid var(--accent); background: transparent;
+           color: var(--accent); font-weight: 600; cursor: pointer; }
+  button.main { background: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.borrar { border-color: var(--danger); color: var(--danger); padding: 6px 10px; }
+
+  .tabla { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; min-width: 640px; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { font-weight: 600; color: var(--muted); font-size: .9rem; }
+  tr:last-child td { border-bottom: 0; }
+  tr.cambiado { background: var(--changed); }
+  td.precio { width: 130px; }
+  .eur { display: flex; align-items: center; gap: 6px; }
+  td.act { width: 90px; text-align: center; }
+  td.del { width: 80px; text-align: right; }
+  .vacio { padding: 24px; color: var(--muted); text-align: center; }
+
+  .pie { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line);
+         padding: 12px 20px; display: flex; gap: 12px; align-items: center; justify-content: center; flex-wrap: wrap; }
+  #estado { font-weight: 600; }
+  #estado.ok { color: var(--ok); }
+  #estado.err { color: var(--danger); }
+  .nota { color: var(--muted); font-size: .9rem; margin-top: 20px; max-width: 70ch; }
+</style>
+</head>
+<body>
+<main class="admin">
+  <h1>Administración de precios</h1>
+  <p class="sub">Cafetería Control Z. Cambia los precios y pulsa “Guardar cambios”.</p>
+
+  <div class="barra">
+    <input type="search" id="buscar" placeholder="Buscar producto" aria-label="Buscar producto">
+    <button id="nuevo">Añadir producto</button>
+    <button id="exportar">Exportar</button>
+    <button id="importar">Importar</button>
+    <input type="file" id="archivo" accept="application/json" hidden>
+  </div>
+
+  <div class="tabla">
+    <table>
+      <thead><tr><th>Producto</th><th>Categoría</th><th>Precio</th><th>Disponible</th><th></th></tr></thead>
+      <tbody id="filas"></tbody>
+    </table>
+  </div>
+  <datalist id="categorias"></datalist>
+
+  <p class="nota">Los datos se guardan en este navegador. Para que los clientes vean los precios en la web hace falta un servidor o base de datos; con “Exportar” puedes sacar una copia en JSON.</p>
+</main>
+
+<div class="pie">
+  <span id="estado" role="status" aria-live="polite">Sin cambios</span>
+  <button id="descartar" disabled>Descartar cambios</button>
+  <button id="guardar" class="main" disabled>Guardar cambios</button>
+</div>
+
+<script>
+  const CLAVE = "controlz_precios";
+  const INICIAL = [
+    ["Café solo", "Cafés", 1.20], ["Café con leche", "Cafés", 1.50], ["Cortado", "Cafés", 1.30],
+    ["Capuchino", "Cafés", 1.90], ["Infusión", "Cafés", 1.30],
+    ["Tostada con tomate", "Desayunos", 1.80], ["Tostada con jamón", "Desayunos", 2.50],
+    ["Croissant", "Desayunos", 1.60], ["Bocadillo de tortilla", "Bocadillos", 3.00],
+    ["Zumo de naranja natural", "Bebidas", 2.20], ["Agua", "Bebidas", 1.00], ["Refresco", "Bebidas", 1.80],
+    ["Menú del día", "Menús", 8.50]
+  ].map(([name, cat, price], i) => ({ id: "p" + (i + 1), name, cat, price, active: true }));
+
+  const $ = id => document.getElementById(id);
+  const copia = o => JSON.parse(JSON.stringify(o));
+  let guardado = cargar();      // última versión guardada
+  let datos = copia(guardado);  // versión en edición
+
+  function cargar() {
+    try { const r = localStorage.getItem(CLAVE); if (r) return JSON.parse(r); } catch (e) {}
+    return copia(INICIAL);
+  }
+
+  function mensaje(txt, tipo = "") { const e = $("estado"); e.textContent = txt; e.className = tipo; }
+
+  function cambiado(p) {
+    const g = guardado.find(x => x.id === p.id);
+    return !g || g.name !== p.name || g.cat !== p.cat || g.price !== p.price || g.active !== p.active;
+  }
+  function hayCambios() {
+    return datos.length !== guardado.length || datos.some(cambiado);
+  }
+  function refrescarEstado() {
+    const c = hayCambios();
+    $("guardar").disabled = !c; $("descartar").disabled = !c;
+    mensaje(c ? "Hay cambios sin guardar" : "Sin cambios");
+  }
+
+  function pintar() {
+    const q = $("buscar").value.trim().toLowerCase();
+    const tbody = $("filas"); tbody.innerHTML = "";
+    const lista = datos.filter(p => p.name.toLowerCase().includes(q) || p.cat.toLowerCase().includes(q));
+    if (!lista.length) tbody.innerHTML = '<tr><td colspan="5" class="vacio">No hay productos que coincidan.</td></tr>';
+    lista.forEach(p => {
+      const tr = document.createElement("tr");
+      tr.dataset.id = p.id;
+      tr.className = cambiado(p) ? "cambiado" : "";
+      tr.innerHTML = `
+        <td><input type="text" data-f="name" aria-label="Nombre" maxlength="60"></td>
+        <td><input type="text" data-f="cat" list="categorias" aria-label="Categoría" maxlength="30"></td>
+        <td class="precio"><div class="eur"><input type="number" data-f="price" min="0" step="0.05" inputmode="decimal" aria-label="Precio en euros"><span>€</span></div></td>
+        <td class="act"><input type="checkbox" data-f="active" aria-label="Disponible"></td>
+        <td class="del"><button class="borrar" data-borrar aria-label="Eliminar producto">Eliminar</button></td>`;
+      tr.querySelector('[data-f=name]').value = p.name;
+      tr.querySelector('[data-f=cat]').value = p.cat;
+      tr.querySelector('[data-f=price]').value = p.price.toFixed(2);
+      tr.querySelector('[data-f=active]').checked = p.active;
+      tbody.appendChild(tr);
+    });
+    $("categorias").innerHTML = [...new Set(datos.map(p => p.cat).filter(Boolean))]
+      .map(c => `<option value="${c.replace(/"/g, "&quot;")}">`).join("");
+    refrescarEstado();
+  }
+
+  // Edición en vivo (sin repintar para no perder el foco)
+  $("filas").addEventListener("input", e => {
+    const campo = e.target.dataset.f; if (!campo) return;
+    const tr = e.target.closest("tr");
+    const p = datos.find(x => x.id === tr.dataset.id);
+    if (campo === "price") {
+      const v = parseFloat(e.target.value);
+      p.price = isNaN(v) ? NaN : Math.round(v * 100) / 100;
+    } else if (campo === "active") p.active = e.target.checked;
+    else p[campo] = e.target.value;
+    tr.className = cambiado(p) ? "cambiado" : "";
+    refrescarEstado();
+  });
+
+  $("filas").addEventListener("click", e => {
+    if (!e.target.matches("[data-borrar]")) return;
+    const id = e.target.closest("tr").dataset.id;
+    const p = datos.find(x => x.id === id);
+    if (confirm(`¿Eliminar “${p.name || "producto sin nombre"}”?`)) {
+      datos = datos.filter(x => x.id !== id); pintar();
+    }
+  });
+
+  $("buscar").addEventListener("input", pintar);
+
+  $("nuevo").addEventListener("click", () => {
+    $("buscar").value = "";
+    datos.push({ id: "p" + Date.now(), name: "", cat: "", price: 0, active: true });
+    pintar();
+    const ins = $("filas").querySelectorAll("tr:last-child [data-f=name]");
+    if (ins.length) { ins[0].focus(); ins[0].scrollIntoView({ block: "center" }); }
+  });
+
+  $("guardar").addEventListener("click", () => {
+    const mal = datos.find(p => !p.name.trim() || !isFinite(p.price) || p.price < 0);
+    if (mal) { mensaje("Revisa los datos: cada producto necesita nombre y un precio válido", "err"); return; }
+    datos.forEach(p => { p.name = p.name.trim(); p.cat = p.cat.trim(); });
+    try {
+      localStorage.setItem(CLAVE, JSON.stringify(datos));
+      guardado = copia(datos); pintar();
+      mensaje("Cambios guardados", "ok");
+    } catch (e) { mensaje("No se pudo guardar en este navegador", "err"); }
+  });
+
+  $("descartar").addEventListener("click", () => {
+    if (confirm("¿Descartar todos los cambios sin guardar?")) { datos = copia(guardado); pintar(); }
+  });
+
+  $("exportar").addEventListener("click", () => {
+    const blob = new Blob([JSON.stringify(datos, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = "precios-controlz.json"; a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  $("importar").addEventListener("click", () => $("archivo").click());
+  $("archivo").addEventListener("change", async e => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      const j = JSON.parse(await f.text());
+      if (!Array.isArray(j) || !j.every(p => p && typeof p.name === "string" && typeof p.price === "number")) throw 0;
+      datos = j.map((p, i) => ({ id: p.id || "i" + Date.now() + i, name: p.name, cat: p.cat || "", price: p.price, active: p.active !== false }));
+      pintar();
+    } catch (err) { mensaje("El archivo no tiene un formato válido", "err"); }
+    e.target.value = "";
+  });
+
+  window.addEventListener("beforeunload", e => { if (hayCambios()) { e.preventDefault(); e.returnValue = ""; } });
+
+  pintar();
+</script>
+</body>
+</html>
